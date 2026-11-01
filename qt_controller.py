@@ -7,7 +7,7 @@ import numpy
 import rclpy
 from argparse import ArgumentParser
 from controller import Controller, tf
-from markers import iPoseMarker, addMarker, processFeedback
+from markers import iPositionMarker, iPoseMarker, iPlaneMarker, iConeMarker, addMarker, processFeedback, sphere, box, plane, vector
 from interactive_markers.interactive_marker_server import InteractiveMarkerServer
 
 from python_qt_binding.QtCore import Qt, QTimer
@@ -60,6 +60,22 @@ class Gui(QWidget):
         mode = self.mode
         if "pose" in mode:
             addMarker(ims, iPoseMarker(c.T), processFeedback(c.setTarget))
+        elif "plane" in mode:
+            markers = [plane(), sphere()]
+            addMarker(ims, iPlaneMarker(c.T[0:3, 3], markers=markers),
+                      processFeedback(c.setTarget))
+        elif "box" in mode:  # constrain position to box
+            tol = 0.5 * numpy.array([0.2, 0.1, 0.05])  # tolerance box
+            addMarker(ims, iPositionMarker(c.T[0:3, 3],
+                                           markers=[sphere(), box(size=vector(*(2.*tol)))]),
+                      processFeedback(c.setTarget))
+        if "cone" in mode:  # constrain orientation to cone
+            eef_axis = numpy.array([0, 1, 0])  # y-axis to align with cone axis
+            T = c.T
+            T[0:3, 3] = numpy.array([-0.25, 0, 0])  # place cone next to the robot
+            # add cone marker aligned with current eef's y-axis
+            cm = iConeMarker(ims, T.dot(tf.rotation_matrix(numpy.pi/2, [-1, 0, 0])),
+                             pose_cb=c.setTarget, angle_cb=c.setTarget)
         ims.applyChanges()
 
         ns_old = numpy.zeros((c.N, 0))
@@ -99,6 +115,9 @@ parser.add_argument(
     help="control mode",
     choices=[
         "pose",
+        "plane",
+        "box",
+        "cone",
     ],
 )
 args = parser.parse_args()

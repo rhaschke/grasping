@@ -16,6 +16,10 @@ def point(x: float = 0, y: float = 0, z: float = 0, **kwargs):
     return Point(x=float(x), y=float(y), z=float(z), **kwargs)
 
 
+def vector(x: float = 0, y: float = 0, z: float = 0, **kwargs):
+    return Vector3(x=float(x), y=float(y), z=float(z), **kwargs)
+
+
 def quaternion(x: float = 0, y: float = 0, z: float = 0, w: float = 1, **kwargs):
     return Quaternion(x=float(x), y=float(y), z=float(z), w=float(w), **kwargs)
 
@@ -30,6 +34,39 @@ def cylinder(radius=0.02, len=0.1, color=colorRGBA(1, 0, 0), **kwargs):
     """Create a cylinder marker"""
     scale = Vector3(x=radius, y=radius, z=len)
     return Marker(type=Marker.CYLINDER, scale=scale, color=color, **kwargs)
+
+
+def box(size=Vector3(x=0.1, y=0.1, z=0.1), color=colorRGBA(1, 1, 1, 0.5), **kwargs):
+    """Create a box marker"""
+    return Marker(type=Marker.CUBE, scale=size, color=color, **kwargs)
+
+
+def plane(size=1.0, color=colorRGBA(1, 1, 1, 0.5), **kwargs):
+    """Create a plane (a flat box)"""
+    return box(size=Vector3(x=size, y=size, z=1e-3), color=color, **kwargs)
+
+
+def cone(halfOpenAngle, scale=0.1, color=colorRGBA(1, 0, 1, 0.5), **kwargs):
+    twopi = numpy.pi * 2
+    height = scale * numpy.cos(halfOpenAngle)
+    radius = scale * numpy.sin(halfOpenAngle)
+    points = []
+    numTriangles = 50
+    for i in range(numTriangles):
+        points.append(point(0, 0, 0))
+        theta = twopi * i/numTriangles
+        points.append(point(radius * numpy.sin(theta), radius * numpy.cos(theta), height))
+        theta = twopi * (i+1)/numTriangles
+        points.append(point(radius * numpy.sin(theta), radius * numpy.cos(theta), height))
+
+    return Marker(type=Marker.TRIANGLE_LIST, points=points, color=color, scale=vector(1, 1, 1), **kwargs)
+
+
+def arrow(len=0.1, width=None, color=colorRGBA(1, 0, 0, 1), **kwargs):
+    """Create an arrow marker"""
+    width = width or 0.1*len
+    scale = Vector3(len, width, width)
+    return Marker(type=Marker.ARROW, scale=scale, color=color, **kwargs)
 
 
 def frame(T, scale=0.1, radius=None, frame_id='world', ns='frame'):
@@ -153,3 +190,46 @@ def iPlaneMarker(pos, markers, name='plane', **kwargs):
         addArrowControls(im, dirs='z')
         addOrientationControls(im, dirs='xy')
     return im
+
+
+class iConeMarker:
+    def __init__(self, ims, T, angle=.4, scale=.2, name='cone',
+                 mode=InteractiveMarkerControl.ROTATE_3D, pose_cb=None, angle_cb=None):
+        self._server = ims
+        self._angle = angle
+        self._scale = scale
+        self._name = name
+        self.cone = iMarker(T, markers=[cone(angle, scale=scale)], name=name + '_pose', mode=mode)
+        self.cone.controls[0].always_visible = True
+        self.handle = iMarker(T, markers=[sphere(color=colorRGBA(0,1,1,1))], name=name + '_angle',
+                              mode=InteractiveMarkerControl.MOVE_3D)
+
+        self._pose_cb = pose_cb
+        self._angle_cb = angle_cb
+        if self._angle_cb:
+            self._angle_cb(self.handle.name, self._angle)
+
+        ims.insert(self.cone, feedback_callback=self.process_pose)
+        ims.insert(self.handle, feedback_callback=self.process_angle)
+        self._server.applyChanges()
+        self.process_pose(InteractiveMarkerFeedback(marker_name=self.cone.name, pose=self.cone.pose))
+
+    def process_pose(self, feedback):
+        T = poseMsgToTM(feedback.pose)
+        if self._pose_cb:
+            self._pose_cb(feedback.marker_name, T)
+        handle_pose = tf.rotation_matrix(self._angle, [1, 0, 0]).dot(tf.translation_matrix([0, 0, self._scale]))
+        self._server.setPose(self._name + '_angle', createPose(T.dot(handle_pose)))
+        self._server.applyChanges()
+
+    def process_angle(self, feedback):
+        T_marker = poseMsgToTM(feedback.pose)
+        T_cone = poseMsgToTM(self.cone.pose)
+        v = T_marker[0:3, 3] - T_cone[0:3, 3] # vector from cone's origin to marker
+        self._scale = numpy.linalg.norm(v)
+        self._angle = numpy.arccos(numpy.maximum(0, T_cone[0:3,2].dot(v) / self._scale))
+        if self._angle_cb:
+            self._angle_cb(feedback.marker_name, self._angle)
+        self.cone.controls[0].markers[0].points = cone(self._angle, self._scale).points
+        self._server.insert(self.cone)
+        self._server.applyChanges()
