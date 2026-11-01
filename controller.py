@@ -11,6 +11,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 import tf_transformations as tf
 from interactive_markers.interactive_marker_server import InteractiveMarkerServer
 from robot_model import RobotModel, Joint
+from robot_model import hat as skew
 from markers import addMarker, processFeedback, iPoseMarker, frame, point, quaternion, colorRGBA
 
 class Controller(object):
@@ -154,6 +155,25 @@ class Controller(object):
         qerr = self.joint_msg.position - self.preferred_joints
         J = numpy.identity(self.J.shape[1])
         return J, -scale*qerr
+
+    def distance_task(self, T_tgt, T_cur, dist=0, scale=1.0):
+        """Keep distance to target position, not considering (approach) direction"""
+        delta = T_cur[0:3, 3] - T_tgt[0:3, 3]
+        return delta.T.dot(self.J[:3]), -scale * (numpy.linalg.norm(delta) - dist)
+
+    def plane_task(self, normal, dist, scale=1.0):
+        """Move eef within plane given by normal vector and distance to origin"""
+        return normal.T.dot(self.J[:3]), -scale * (normal.dot(self.T[0:3, 3]) - dist)
+
+    def parallel_axes_task(self, axis, reference, scale=1.0):
+        """Align axis in eef frame to be parallel to reference axis in base frame"""
+        axis = self.T[0:3, 0:3].dot(axis)  # transform axis from eef frame to base frame
+        return (skew(reference).dot(skew(axis))).dot(self.J[3:]), scale * numpy.cross(reference, axis)
+
+    def cone_task(self, axis, reference, threshold, scale=1.0):
+        """Align axis in eef frame to lie in cone spanned by reference axis and opening angle acos(threshold)"""
+        axis = self.T[0:3, 0:3].dot(axis)  # transform axis from eef frame to base frame
+        return reference.T.dot(skew(axis)).dot(self.J[3:]), scale * (reference.T.dot(axis) - threshold)
 
     def position_control(self, target):
         q_delta = self.solve(self.position_task(target, self.T))

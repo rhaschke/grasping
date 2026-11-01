@@ -83,6 +83,42 @@ class Gui(QWidget):
             if "pose" in mode:  # position + orientation control
                 tasks = [c.pose_task(c.targets["pose"], c.T)]
 
+            elif "plane" in mode:
+                # move on a plane spanned by xy axes of marker
+                T = c.targets['plane']
+                normal = T[0:3, 2]  # plane normal from marker's z-axis
+                tasks = [c.plane_task(normal, normal.dot(T[0:3, 3]), scale=0.1)]
+
+                if "dist" in mode:
+                    tasks.append(c.distance_task(T, c.T, dist=0.2, scale=0.1))  # maintain distance 0.2 to center
+
+                if "rotate" in mode:
+                    tasks.append(
+                        (normal.T.dot(c.J[3:]), 0.01)
+                    )  # rotates with constant speed about normal axis
+                elif "rotateCenter" in mode:
+                    # rotate about center with linear velocity: w x r
+                    r = T[0:3, 3] - c.T[0:3, 3]
+                    tasks.append((c.J[:3], numpy.cross(0.1 * normal, r)))
+
+            elif "box" in mode:  # constrain position
+                J, e = c.position_task(c.targets['pos'], c.T)
+                lb_violated, ub_violated = (e < -tol), (e > tol)
+                violated = lb_violated | ub_violated
+                # clip errors to box boundaries
+                clipped = numpy.array(e, copy=True)
+                clipped[lb_violated] -= -tol[lb_violated]
+                clipped[ub_violated] -= tol[ub_violated]
+                # if error violates box constraint, move into box via equality task and clipped error
+                tasks = [(J[violated], clipped[violated])]
+
+            # keep gripper aligned with normal axis
+            normal = numpy.array([0, 0, 1])  # world z-axis
+            if "parallel" in mode:  # using parallel_axes_task
+                tasks.append(c.parallel_axes_task(numpy.array([0, 1, 0]), normal))
+            elif "cone" in mode:  # using cone_task
+                tasks.append(c.cone_task(numpy.array([0, 1, 0]), normal, threshold=1.0))
+
             self.showErrors(tasks)
             q_delta = c.solve(tasks)
 
@@ -117,6 +153,10 @@ parser.add_argument(
         "pose",
         "plane",
         "box",
+        "dist",
+        "rotate",
+        "rotateCenter",
+        "parallel",
         "cone",
     ],
 )
